@@ -15,11 +15,11 @@ var (
 type FactoryFunc func() (io.Closer, error)
 
 type errCloser struct {
-	err error
+	error
 }
 
 func (ec *errCloser) Close() error {
-	return ec.err
+	return ec.error
 }
 
 type idle struct {
@@ -88,7 +88,7 @@ func (p *Pool) Close() error {
 
 func (p *Pool) Release(conn io.Closer) error {
 	if ec, is := conn.(*errCloser); is {
-		return ec.err
+		return ec
 	}
 
 	if p.isClosed() {
@@ -112,7 +112,7 @@ func (p *Pool) Release(conn io.Closer) error {
 
 func (p *Pool) Acquire() (closer io.Closer) {
 	if p.isClosed() {
-		return &errCloser{err: ErrPoolHasClosed}
+		return &errCloser{error: ErrPoolHasClosed}
 	}
 
 	var (
@@ -133,7 +133,7 @@ func (p *Pool) Acquire() (closer io.Closer) {
 		closer, err = p.factory()
 		if err != nil {
 			p.active--
-			closer = &errCloser{err: err}
+			closer = &errCloser{error: err}
 		}
 
 		goto END
@@ -142,7 +142,7 @@ func (p *Pool) Acquire() (closer io.Closer) {
 WAIT:
 	p.wait()
 	if p.isClosed() {
-		closer = &errCloser{err: ErrPoolHasClosed}
+		closer = &errCloser{error: ErrPoolHasClosed}
 		goto END
 	}
 
