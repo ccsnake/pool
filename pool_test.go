@@ -53,7 +53,7 @@ func TestClose(t *testing.T) {
 	}
 
 	for _, conn := range conns {
-		p.Release(conn)
+		p.Release(conn, nil)
 	}
 
 	if err := p.Close(); err != nil {
@@ -97,7 +97,7 @@ func TestConnReuse(t *testing.T) {
 	}
 
 	for j := 0; j < cap; j++ {
-		p.Release(<-cc)
+		p.Release(<-cc, nil)
 	}
 
 	if n := p.Status().Idle; n != cap {
@@ -129,7 +129,7 @@ func BenchmarkGet(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			conn := p.Acquire()
-			p.Release(conn)
+			p.Release(conn, nil)
 		}
 	})
 }

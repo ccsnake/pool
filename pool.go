@@ -54,7 +54,7 @@ func New(factory FactoryFunc, opts ...Option) *Pool {
 	for i := 0; i < p.opt.InitNum; i++ {
 		closer, err := p.factory()
 		if err != nil {
-			p.opt.logger.Printf("dial init resource failed %s", err.Error())
+			p.opt.logger.Printf("pool init resource failed %s", err.Error())
 			continue
 		}
 		p.active++
@@ -86,12 +86,13 @@ func (p *Pool) Close() error {
 	return nil
 }
 
-func (p *Pool) Release(conn io.Closer) error {
+func (p *Pool) Release(conn io.Closer, err error) error {
 	if ec, is := conn.(*errCloser); is {
 		return ec
 	}
 
-	if p.isClosed() {
+	if p.isClosed() || err != nil {
+		p.active--
 		return conn.Close()
 	}
 
