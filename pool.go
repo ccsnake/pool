@@ -222,7 +222,8 @@ func (p *Pool) Do(f func(obj io.Closer) error) error {
 	if err != nil {
 		return err
 	}
+	err = f(obj)
 
-	p.Release(obj, f(obj))
-	return nil
+	p.Release(obj, err)
+	return err
 }
