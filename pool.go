@@ -111,16 +111,16 @@ func (p *Pool) Release(conn io.Closer, err error) error {
 	return nil
 }
 
-func (p *Pool) Acquire() (closer io.Closer) {
+func (p *Pool) acquire() (closer io.Closer, err error) {
 	if p.isClosed() {
-		return &errCloser{error: ErrPoolHasClosed}
+		return nil, ErrPoolHasClosed
 	}
 
 	var (
 		now     = time.Now()
 		element *list.Element
-		err     error
 	)
+
 	p.lock.Lock()
 	p.prune(now)
 	if element = p.idle.Front(); element != nil {
@@ -134,7 +134,6 @@ func (p *Pool) Acquire() (closer io.Closer) {
 		closer, err = p.factory()
 		if err != nil {
 			p.active--
-			closer = &errCloser{error: err}
 		}
 
 		goto END
@@ -143,20 +142,26 @@ func (p *Pool) Acquire() (closer io.Closer) {
 WAIT:
 	p.wait()
 	if p.isClosed() {
-		closer = &errCloser{error: ErrPoolHasClosed}
+		err = ErrPoolHasClosed
 		goto END
 	}
 
-	element = p.idle.Front()
-	if element == nil {
+	if element = p.idle.Front(); element == nil {
 		goto WAIT
 	}
 
 	closer = p.idle.Remove(element).(*idle).Closer
-
 END:
 	p.lock.Unlock()
 	return
+}
+
+func (p *Pool) Acquire() io.Closer {
+	closer, err := p.acquire()
+	if err != nil {
+		return &errCloser{error: err}
+	}
+	return closer
 }
 
 func (p *Pool) wakeup() {
@@ -210,4 +215,14 @@ func (p *Pool) Status() Status {
 	}
 	p.lock.Unlock()
 	return s
+}
+
+func (p *Pool) Do(f func(obj io.Closer) error) error {
+	obj, err := p.acquire()
+	if err != nil {
+		return err
+	}
+
+	p.Release(obj, f(obj))
+	return nil
 }
