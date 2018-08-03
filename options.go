@@ -6,7 +6,6 @@ import (
 
 const (
 	defaultMaxNum          = 20
-	defaultDialTimeout     = time.Millisecond * 200
 	defaultMaxIdleDuration = time.Second * 30
 )
 
@@ -29,10 +28,6 @@ func newOptions(opts ...Option) Options {
 }
 
 func checkOptions(options *Options) {
-	if options.MaxNum == 0 {
-		options.MaxNum = defaultMaxNum
-	}
-
 	if options.MaxIdleDuration == 0 {
 		options.MaxIdleDuration = defaultMaxIdleDuration
 	}
@@ -45,5 +40,23 @@ func checkOptions(options *Options) {
 func MaxNum(i int) Option {
 	return func(options *Options) {
 		options.MaxNum = i
+	}
+}
+
+func InitNum(i int) Option {
+	return func(options *Options) {
+		options.InitNum = i
+	}
+}
+
+func MaxIdleDuration(d time.Duration) Option {
+	return func(options *Options) {
+		options.MaxIdleDuration = d
+	}
+}
+
+func Logger(l logger) Option {
+	return func(options *Options) {
+		options.logger = l
 	}
 }
