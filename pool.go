@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	ErrPoolHasClosed = errors.New("connection Pool is closed")
+	ErrPoolHasClosed = errors.New("pool has closed")
 )
 
 type FactoryFunc func() (io.Closer, error)
@@ -67,13 +67,11 @@ func New(factory FactoryFunc, opts ...Option) *Pool {
 
 func (p *Pool) Close() error {
 	p.lock.Lock()
-	defer p.lock.Unlock()
-
 	close(p.stopCh)
 
 	for e := p.idle.Front(); e != nil; e = e.Next() {
 		if err := e.Value.(*idle).Close(); err != nil {
-			p.opt.logger.Printf("Pool close failed for close timeout connection:%s", err.Error())
+			p.opt.logger.Printf("close pool failed %s", err.Error())
 		}
 	}
 
@@ -82,18 +80,19 @@ func (p *Pool) Close() error {
 	if p.cond != nil {
 		p.cond.Broadcast()
 	}
+	p.lock.Unlock()
 
 	return nil
 }
 
-func (p *Pool) Release(conn io.Closer, err error) error {
-	if ec, is := conn.(*errCloser); is {
+func (p *Pool) Release(closer io.Closer, err error) error {
+	if ec, is := closer.(*errCloser); is {
 		return ec
 	}
 
 	if p.isClosed() || err != nil {
 		p.active--
-		return conn.Close()
+		return closer.Close()
 	}
 
 	now := time.Now()
@@ -101,10 +100,10 @@ func (p *Pool) Release(conn io.Closer, err error) error {
 	if p.opt.MaxNum != 0 && (p.active > p.opt.MaxNum || p.idle.Len() >= p.opt.MaxNum) {
 		p.active--
 		p.lock.Unlock()
-		return conn.Close()
+		return closer.Close()
 	}
 
-	p.idle.PushFront(&idle{Closer: conn, activeTime: now})
+	p.idle.PushFront(&idle{Closer: closer, activeTime: now})
 	p.wakeup()
 	p.lock.Unlock()
 
@@ -125,35 +124,33 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 	p.prune(now)
 	if element = p.idle.Front(); element != nil {
 		closer = p.idle.Remove(element).(*idle).Closer
-		goto END
+		p.lock.Unlock()
+		return closer, nil
 	}
 
 	// not enough
 	if p.opt.MaxNum == 0 || p.active < p.opt.MaxNum {
 		p.active++
-		closer, err = p.factory()
-		if err != nil {
+		if closer, err = p.factory(); err != nil {
 			p.active--
 		}
-
-		goto END
+		p.lock.Unlock()
+		return closer, err
 	}
 
-WAIT:
-	p.wait()
-	if p.isClosed() {
-		err = ErrPoolHasClosed
-		goto END
-	}
+	for {
+		p.wait()
+		if p.isClosed() {
+			p.lock.Unlock()
+			return nil, ErrPoolHasClosed
+		}
 
-	if element = p.idle.Front(); element == nil {
-		goto WAIT
+		if element = p.idle.Front(); element != nil {
+			closer = p.idle.Remove(element).(*idle).Closer
+			p.lock.Unlock()
+			return closer, nil
+		}
 	}
-
-	closer = p.idle.Remove(element).(*idle).Closer
-END:
-	p.lock.Unlock()
-	return
 }
 
 func (p *Pool) Acquire() io.Closer {
@@ -179,7 +176,6 @@ func (p *Pool) wait() {
 }
 
 func (p *Pool) prune(now time.Time) {
-	// prune timeout connections
 	for element := p.idle.Back(); element != nil && p.idle.Len() > p.opt.InitNum; element = element.Prev() {
 		ic := element.Value.(*idle)
 		if ic.activeTime.Add(p.opt.MaxIdleDuration).Sub(now) > 0 {
