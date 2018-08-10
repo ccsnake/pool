@@ -85,12 +85,18 @@ func (p *Pool) Close() error {
 	return nil
 }
 
-func (p *Pool) Release(closer io.Closer, err error) error {
-	if ec, is := closer.(*errCloser); is {
-		return ec
+var idlePool = &sync.Pool{
+	New: func() interface{} {
+		return &idle{}
+	},
+}
+
+func (p *Pool) Release(closer io.Closer, forceClose bool) error {
+	if _, is := closer.(*errCloser); is {
+		return nil
 	}
 
-	if p.isClosed() || err != nil {
+	if p.isClosed() || forceClose {
 		p.active--
 		return closer.Close()
 	}
@@ -103,7 +109,11 @@ func (p *Pool) Release(closer io.Closer, err error) error {
 		return closer.Close()
 	}
 
-	p.idle.PushFront(&idle{Closer: closer, activeTime: now})
+	i := idlePool.Get().(*idle)
+	i.Closer = closer
+	i.activeTime = now
+	// p.idle.PushFront(&idle{Closer: closer, activeTime: now})
+	p.idle.PushFront(i)
 	p.wakeup()
 	p.lock.Unlock()
 
@@ -123,8 +133,10 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 	p.lock.Lock()
 	p.prune(now)
 	if element = p.idle.Front(); element != nil {
-		closer = p.idle.Remove(element).(*idle).Closer
+		i := p.idle.Remove(element).(*idle)
+		closer = i.Closer
 		p.lock.Unlock()
+		idlePool.Put(i)
 		return closer, nil
 	}
 
@@ -146,8 +158,10 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 		}
 
 		if element = p.idle.Front(); element != nil {
-			closer = p.idle.Remove(element).(*idle).Closer
+			i := p.idle.Remove(element).(*idle)
+			closer = i.Closer
 			p.lock.Unlock()
+			idlePool.Put(i)
 			return closer, nil
 		}
 	}
@@ -220,6 +234,6 @@ func (p *Pool) Do(f func(obj io.Closer) error) error {
 	}
 	err = f(obj)
 
-	p.Release(obj, err)
+	p.Release(obj, err != nil)
 	return err
 }

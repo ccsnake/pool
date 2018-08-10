@@ -40,20 +40,20 @@ func TestGet(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	cap := 1000
-	p := New(builder, MaxNum(cap))
+	count := 1000
+	p := New(builder, MaxNum(count))
 
-	var conns []io.Closer
-	for i := 0; i < cap; i++ {
-		conns = append(conns, p.Acquire())
+	var closers []io.Closer
+	for i := 0; i < count; i++ {
+		closers = append(closers, p.Acquire())
 	}
 
-	if p.Status().Active != cap {
-		t.Errorf("active != %d after get %d times", cap, cap)
+	if p.Status().Active != count {
+		t.Errorf("active != %d after get %d times", count, count)
 	}
 
-	for _, conn := range conns {
-		p.Release(conn, nil)
+	for _, conn := range closers {
+		p.Release(conn, false)
 	}
 
 	if err := p.Close(); err != nil {
@@ -97,7 +97,7 @@ func TestConnReuse(t *testing.T) {
 	}
 
 	for j := 0; j < cap; j++ {
-		p.Release(<-cc, nil)
+		p.Release(<-cc, false)
 	}
 
 	if n := p.Status().Idle; n != cap {
@@ -122,14 +122,12 @@ func TestConnReuse(t *testing.T) {
 }
 
 func BenchmarkGet(b *testing.B) {
-	cap := 1000
-	p := New(builder, MaxNum(cap))
+	p := New(builder, MaxNum(1000))
 	defer p.Close()
-
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			conn := p.Acquire()
-			p.Release(conn, nil)
+			p.Release(conn, false)
 		}
 	})
 }
