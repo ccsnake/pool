@@ -1,17 +1,29 @@
 package pool
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
 )
 
+var errDoFailed = errors.New("do failed")
+
 type mockResource struct {
 }
 
 func (mr *mockResource) Close() error {
 	return nil
+}
+
+var act int32
+
+func (mr *mockResource) Do() error {
+	if atomic.AddInt32(&act, 1)%2 == 0 {
+		return nil
+	}
+	return errDoFailed
 }
 
 func builder() (io.Closer, error) {
@@ -73,7 +85,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestConnReuse(t *testing.T) {
-	cap := 1000
+	maxActive := 1000
 
 	var dc int32
 
@@ -82,11 +94,11 @@ func TestConnReuse(t *testing.T) {
 		return builder()
 	}
 
-	p := New(nbuilder, MaxNum(cap))
+	p := New(nbuilder, MaxNum(maxActive))
 
 	var wg sync.WaitGroup
-	cc := make(chan io.Closer, cap)
-	for j := 0; j < cap; j++ {
+	cc := make(chan io.Closer, maxActive)
+	for j := 0; j < maxActive; j++ {
 		wg.Add(1)
 		go func() {
 			obj, err := p.Acquire()
@@ -99,24 +111,24 @@ func TestConnReuse(t *testing.T) {
 	}
 	wg.Wait()
 
-	if n := int(atomic.LoadInt32(&dc)); n != cap {
-		t.Errorf("dialcount expect %d but %d after get", cap, n)
+	if n := int(atomic.LoadInt32(&dc)); n != maxActive {
+		t.Errorf("dialcount expect %d but %d after get", maxActive, n)
 	}
 
-	if n := p.Status().Active; n != cap {
-		t.Errorf("active expect %d but %d after get", cap, n)
+	if n := p.Status().Active; n != maxActive {
+		t.Errorf("active expect %d but %d after get", maxActive, n)
 	}
 
-	for j := 0; j < cap; j++ {
+	for j := 0; j < maxActive; j++ {
 		p.Release(<-cc, false)
 	}
 
-	if n := p.Status().Idle; n != cap {
-		t.Errorf("idle expect %d but %d after get close", cap, n)
+	if n := p.Status().Idle; n != maxActive {
+		t.Errorf("idle expect %d but %d after get close", maxActive, n)
 	}
 
-	if n := p.Status().Active; n != cap {
-		t.Errorf("active expect %d but %d after get close", cap, n)
+	if n := p.Status().Active; n != maxActive {
+		t.Errorf("active expect %d but %d after get close", maxActive, n)
 	}
 
 	if err := p.Close(); err != nil {
@@ -137,11 +149,12 @@ func BenchmarkGet(b *testing.B) {
 	defer p.Close()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			conn, err := p.Acquire()
+			obj, err := p.Acquire()
 			if err != nil {
 				b.Error(err)
 			}
-			p.Release(conn, false)
+			err = obj.(*mockResource).Do()
+			p.Release(obj, err != nil)
 		}
 	})
 }
@@ -152,8 +165,7 @@ func BenchmarkDo(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			p.Do(func(obj io.Closer) error {
-				_, _ = obj.(*mockResource)
-				return nil
+				return obj.(*mockResource).Do()
 			})
 		}
 	})
