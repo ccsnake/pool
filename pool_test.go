@@ -147,11 +147,12 @@ func BenchmarkGet(b *testing.B) {
 }
 
 func BenchmarkDo(b *testing.B) {
-	p := New(builder, MaxNum(200))
+	p := New(builder, MaxNum(20))
 	defer p.Close()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			p.Do(func(obj io.Closer) error {
+				_, _ = obj.(*mockResource)
 				return nil
 			})
 		}
