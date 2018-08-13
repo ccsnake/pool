@@ -147,7 +147,7 @@ func BenchmarkGet(b *testing.B) {
 }
 
 func BenchmarkDo(b *testing.B) {
-	p := New(builder, MaxNum(1000))
+	p := New(builder, MaxNum(200))
 	defer p.Close()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

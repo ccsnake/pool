@@ -129,9 +129,10 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 		}
 
 		if element = p.idle.Front(); element != nil {
-			i := p.idle.Remove(element).(*idle)
-			closer = i.Closer
+			p.idle.Remove(element)
 			p.lock.Unlock()
+			i := (element).Value.(*idle)
+			closer = i.Closer
 			idlePool.Put(i)
 			return closer, nil
 		}
