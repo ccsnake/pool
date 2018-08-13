@@ -12,7 +12,7 @@ const (
 type Option func(*Options)
 type Options struct {
 	InitNum         int
-	MaxNum          int
+	MaxActive       int
 	MaxIdleDuration time.Duration
 	logger          logger
 }
@@ -39,7 +39,7 @@ func checkOptions(options *Options) {
 
 func MaxNum(i int) Option {
 	return func(options *Options) {
-		options.MaxNum = i
+		options.MaxActive = i
 	}
 }
 

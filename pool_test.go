@@ -21,7 +21,10 @@ func builder() (io.Closer, error) {
 func TestGet(t *testing.T) {
 	p := New(builder, MaxNum(2))
 
-	conn := p.Acquire()
+	conn, err := p.Acquire()
+	if err != nil {
+		t.Errorf("Acquire %s", err)
+	}
 	if _, is := conn.(*mockResource); !is {
 		t.Error("Acquire err")
 	}
@@ -45,7 +48,11 @@ func TestClose(t *testing.T) {
 
 	var closers []io.Closer
 	for i := 0; i < count; i++ {
-		closers = append(closers, p.Acquire())
+		obj, err := p.Acquire()
+		if err != nil {
+			t.Error(err)
+		}
+		closers = append(closers, obj)
 	}
 
 	if p.Status().Active != count {
@@ -82,7 +89,11 @@ func TestConnReuse(t *testing.T) {
 	for j := 0; j < cap; j++ {
 		wg.Add(1)
 		go func() {
-			cc <- p.Acquire()
+			obj, err := p.Acquire()
+			if err != nil {
+				t.Error(err)
+			}
+			cc <- obj
 			wg.Done()
 		}()
 	}
@@ -126,8 +137,23 @@ func BenchmarkGet(b *testing.B) {
 	defer p.Close()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			conn := p.Acquire()
+			conn, err := p.Acquire()
+			if err != nil {
+				b.Error(err)
+			}
 			p.Release(conn, false)
+		}
+	})
+}
+
+func BenchmarkDo(b *testing.B) {
+	p := New(builder, MaxNum(1000))
+	defer p.Close()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			p.Do(func(obj io.Closer) error {
+				return nil
+			})
 		}
 	})
 }

@@ -14,14 +14,6 @@ var (
 
 type FactoryFunc func() (io.Closer, error)
 
-type errCloser struct {
-	error
-}
-
-func (ec *errCloser) Close() error {
-	return ec.error
-}
-
 type idle struct {
 	activeTime time.Time
 	io.Closer
@@ -92,19 +84,18 @@ var idlePool = &sync.Pool{
 }
 
 func (p *Pool) Release(closer io.Closer, forceClose bool) error {
-	if _, is := closer.(*errCloser); is {
-		return nil
-	}
-
+	now := time.Now()
+	p.lock.Lock()
 	if p.isClosed() || forceClose {
 		p.active--
+		p.wakeup()
+		p.lock.Unlock()
 		return closer.Close()
 	}
 
-	now := time.Now()
-	p.lock.Lock()
-	if p.opt.MaxNum != 0 && (p.active > p.opt.MaxNum || p.idle.Len() >= p.opt.MaxNum) {
+	if p.opt.MaxActive != 0 && (p.active > p.opt.MaxActive || p.idle.Len() >= p.opt.MaxActive) {
 		p.active--
+		p.wakeup()
 		p.lock.Unlock()
 		return closer.Close()
 	}
@@ -112,7 +103,6 @@ func (p *Pool) Release(closer io.Closer, forceClose bool) error {
 	i := idlePool.Get().(*idle)
 	i.Closer = closer
 	i.activeTime = now
-	// p.idle.PushFront(&idle{Closer: closer, activeTime: now})
 	p.idle.PushFront(i)
 	p.wakeup()
 	p.lock.Unlock()
@@ -132,26 +122,7 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 
 	p.lock.Lock()
 	p.prune(now)
-	if element = p.idle.Front(); element != nil {
-		i := p.idle.Remove(element).(*idle)
-		closer = i.Closer
-		p.lock.Unlock()
-		idlePool.Put(i)
-		return closer, nil
-	}
-
-	// not enough
-	if p.opt.MaxNum == 0 || p.active < p.opt.MaxNum {
-		p.active++
-		if closer, err = p.factory(); err != nil {
-			p.active--
-		}
-		p.lock.Unlock()
-		return closer, err
-	}
-
 	for {
-		p.wait()
 		if p.isClosed() {
 			p.lock.Unlock()
 			return nil, ErrPoolHasClosed
@@ -164,15 +135,22 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 			idlePool.Put(i)
 			return closer, nil
 		}
+
+		// not enough
+		if p.opt.MaxActive == 0 || p.active < p.opt.MaxActive {
+			p.active++
+			if closer, err = p.factory(); err != nil {
+				p.active--
+			}
+			p.lock.Unlock()
+			return closer, err
+		}
+		p.wait()
 	}
 }
 
-func (p *Pool) Acquire() io.Closer {
-	closer, err := p.acquire()
-	if err != nil {
-		return &errCloser{error: err}
-	}
-	return closer
+func (p *Pool) Acquire() (io.Closer, error) {
+	return p.acquire()
 }
 
 func (p *Pool) wakeup() {
