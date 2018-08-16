@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"container/list"
 	"errors"
 	"io"
 	"sync"
@@ -27,7 +26,7 @@ type Pool struct {
 
 	cond *sync.Cond
 	lock sync.Mutex
-	idle *list.List
+	idle []idle
 
 	active int
 	stopCh chan struct{}
@@ -38,7 +37,7 @@ func New(factory FactoryFunc, opts ...Option) *Pool {
 	p := &Pool{
 		factory: factory,
 		opt:     options,
-		idle:    list.New(),
+		idle:    make([]idle, 0, options.MaxActive),
 		stopCh:  make(chan struct{}),
 	}
 
@@ -50,7 +49,7 @@ func New(factory FactoryFunc, opts ...Option) *Pool {
 			continue
 		}
 		p.active++
-		p.idle.PushFront(&idle{Closer: closer, activeTime: time.Now()})
+		p.idle = append(p.idle, idle{Closer: closer, activeTime: time.Now()})
 	}
 	p.lock.Unlock()
 
@@ -61,26 +60,20 @@ func (p *Pool) Close() error {
 	p.lock.Lock()
 	close(p.stopCh)
 
-	for e := p.idle.Front(); e != nil; e = e.Next() {
-		if err := e.Value.(*idle).Close(); err != nil {
+	for _, ic := range p.idle {
+		if err := ic.Closer.Close(); err != nil {
 			p.opt.logger.Printf("close pool failed %s", err.Error())
 		}
 	}
 
-	p.active -= p.idle.Len()
-	p.idle.Init()
+	p.active -= len(p.idle)
+	p.idle = p.idle[:0]
 	if p.cond != nil {
 		p.cond.Broadcast()
 	}
 	p.lock.Unlock()
 
 	return nil
-}
-
-var idlePool = &sync.Pool{
-	New: func() interface{} {
-		return &idle{}
-	},
 }
 
 func (p *Pool) Release(closer io.Closer, forceClose bool) error {
@@ -93,17 +86,17 @@ func (p *Pool) Release(closer io.Closer, forceClose bool) error {
 		return closer.Close()
 	}
 
-	if p.opt.MaxActive != 0 && (p.active > p.opt.MaxActive || p.idle.Len() >= p.opt.MaxActive) {
+	if p.opt.MaxActive != 0 && (p.active > p.opt.MaxActive || len(p.idle) >= p.opt.MaxActive) {
 		p.active--
 		p.wakeup()
 		p.lock.Unlock()
 		return closer.Close()
 	}
 
-	i := idlePool.Get().(*idle)
-	i.Closer = closer
-	i.activeTime = now
-	p.idle.PushFront(i)
+	p.idle = append(p.idle, idle{
+		activeTime: now,
+		Closer:     closer,
+	})
 	p.wakeup()
 	p.lock.Unlock()
 
@@ -115,11 +108,7 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 		return nil, ErrPoolHasClosed
 	}
 
-	var (
-		now     = time.Now()
-		element *list.Element
-	)
-
+	now := time.Now()
 	p.lock.Lock()
 	p.prune(now)
 	for {
@@ -128,13 +117,11 @@ func (p *Pool) acquire() (closer io.Closer, err error) {
 			return nil, ErrPoolHasClosed
 		}
 
-		if element = p.idle.Front(); element != nil {
-			p.idle.Remove(element)
+		if len(p.idle) > 0 {
+			ic := p.idle[len(p.idle)-1]
+			p.idle = p.idle[:len(p.idle)-1]
 			p.lock.Unlock()
-			i := (element).Value.(*idle)
-			closer = i.Closer
-			idlePool.Put(i)
-			return closer, nil
+			return ic.Closer, nil
 		}
 
 		// not enough
@@ -169,12 +156,11 @@ func (p *Pool) wait() {
 }
 
 func (p *Pool) prune(now time.Time) {
-	for element := p.idle.Back(); element != nil && p.idle.Len() > p.opt.InitNum; element = element.Prev() {
-		ic := element.Value.(*idle)
+	for _, ic := range p.idle {
 		if ic.activeTime.Add(p.opt.MaxIdleDuration).Sub(now) > 0 {
 			break
 		}
-		p.idle.Remove(element)
+		p.idle = p.idle[:len(p.idle)-1]
 		if err := ic.Closer.Close(); err != nil {
 			p.opt.logger.Printf("prune failed for close timeout resource:%s", err.Error())
 		}
@@ -200,7 +186,7 @@ func (p *Pool) Status() Status {
 	p.lock.Lock()
 	s := Status{
 		Active: p.active,
-		Idle:   p.idle.Len(),
+		Idle:   len(p.idle),
 	}
 	p.lock.Unlock()
 	return s

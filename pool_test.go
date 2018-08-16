@@ -20,10 +20,11 @@ func (mr *mockResource) Close() error {
 var act int32
 
 func (mr *mockResource) Do() error {
-	if atomic.AddInt32(&act, 1)%2 == 0 {
-		return nil
-	}
-	return errDoFailed
+	// if atomic.AddInt32(&act, 1)%2 == 0 {
+	// 	return nil
+	// }
+	// return errDoFailed
+	return nil
 }
 
 func builder() (io.Closer, error) {
@@ -144,7 +145,7 @@ func TestConnReuse(t *testing.T) {
 	}
 }
 
-func BenchmarkGet(b *testing.B) {
+func BenchmarkGetPut(b *testing.B) {
 	p := New(builder, MaxNum(1000))
 	defer p.Close()
 	b.RunParallel(func(pb *testing.PB) {
